@@ -2,16 +2,19 @@ import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const supabaseUrl = Deno.env.get("SUPABASE_URL") || "";
-const supabaseKey = Deno.env.get("SUPABASE_KEY") || ""; // Service Role Key သုံးရင် ပိုကောင်း
+const supabaseKey = Deno.env.get("SUPABASE_KEY") || "";
 const supabase = createClient(supabaseUrl, supabaseKey);
+
+// Deno Deploy Settings ထဲမှာ ဒီ ၂ ခု ထပ်ဖြည့်ပေးရမယ်
+const TG_BOT_TOKEN = Deno.env.get("TG_BOT_TOKEN") || ""; 
+const TG_CHAT_ID = Deno.env.get("TG_CHAT_ID") || ""; // ဥပမာ -100xxxx သို့ @mychannel
 
 const BUCKET_NAME = "lugyiapp"; 
 
 serve(async (req) => {
   const url = new URL(req.url);
 
-  // --- 1. CORS Proxy (Remote URL တွေဆွဲဖို့အတွက်) ---
-  // Browser ကနေ တခြား Link ကိုတန်းဆွဲရင် CORS error တက်တတ်လို့ Deno ကို ကြားခံခံတာပါ
+  // --- 1. CORS Proxy ---
   if (url.pathname === "/proxy") {
     const targetUrl = url.searchParams.get("url");
     if (!targetUrl) return new Response("Missing URL", { status: 400 });
@@ -20,37 +23,52 @@ serve(async (req) => {
       return new Response(resp.body, {
         headers: { "Content-Type": resp.headers.get("Content-Type") || "image/jpeg" }
       });
-    } catch (e) {
-      return new Response("Failed to fetch image", { status: 500 });
-    }
+    } catch (e) { return new Response("Error", { status: 500 }); }
   }
 
-  // --- 2. Upload API ---
+  // --- 2. Upload & Post API ---
   if (req.method === "POST" && url.pathname === "/upload") {
     try {
       const formData = await req.formData();
       const file = formData.get("file") as File;
+      const caption = formData.get("caption") as string; // Telegram စာသား
       
-      if (!file) return new Response("No file uploaded", { status: 400 });
+      if (!file) return new Response("No file", { status: 400 });
 
-      // မြန်မာနာမည် ပြဿနာရှင်းရန် Random Name ပေးခြင်း
+      // Upload to Supabase
       const fileExt = file.name.split('.').pop() || 'jpg';
       const safeName = `img_${Date.now()}_${Math.random().toString(36).substring(2, 9)}.${fileExt}`;
       
-      const { data, error } = await supabase.storage
+      const { error: upError } = await supabase.storage
         .from(BUCKET_NAME)
-        .upload(safeName, file, {
-          contentType: file.type,
-          upsert: false
-        });
+        .upload(safeName, file, { contentType: file.type, upsert: false });
 
-      if (error) throw error;
+      if (upError) throw upError;
 
       const { data: { publicUrl } } = supabase.storage
         .from(BUCKET_NAME)
         .getPublicUrl(safeName);
 
-      return new Response(JSON.stringify({ url: publicUrl }), {
+      // 🔥 Post to Telegram Logic 🔥
+      let tgResult = "Skipped";
+      if (TG_BOT_TOKEN && TG_CHAT_ID && caption) {
+        // Supabase Link ကိုယူပီး Telegram ကို လှမ်းပို့တာ (ပုံပြန်တင်စရာမလိုတော့ဘူး)
+        const tgUrl = `https://api.telegram.org/bot${TG_BOT_TOKEN}/sendPhoto`;
+        const tgResp = await fetch(tgUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            chat_id: TG_CHAT_ID,
+            photo: publicUrl,
+            caption: caption,
+            parse_mode: "HTML" // Bold, Italic သုံးလို့ရအောင်
+          })
+        });
+        const tgData = await tgResp.json();
+        tgResult = tgData.ok ? "Sent ✅" : "Failed ❌";
+      }
+
+      return new Response(JSON.stringify({ url: publicUrl, telegram: tgResult }), {
         headers: { "Content-Type": "application/json" },
       });
 
@@ -66,172 +84,117 @@ serve(async (req) => {
     <head>
       <meta charset="UTF-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <title>Smart Poster Uploader</title>
+      <title>Poster + Telegram</title>
       <style>
-        :root { --primary: #0ea5e9; --bg: #f8fafc; }
-        body { font-family: sans-serif; background: var(--bg); display: flex; justify-content: center; padding: 20px; min-height: 100vh; }
-        .card { background: white; width: 100%; max-width: 450px; padding: 25px; border-radius: 16px; box-shadow: 0 4px 20px rgba(0,0,0,0.08); text-align: center; }
-        h2 { margin-top: 0; color: #334155; }
+        :root { --primary: #0088cc; --bg: #f0f2f5; } /* Telegram Color Theme */
+        body { font-family: sans-serif; background: var(--bg); display: flex; justify-content: center; padding: 20px; }
+        .card { background: white; width: 100%; max-width: 450px; padding: 20px; border-radius: 12px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        h2 { text-align: center; color: var(--primary); margin-top: 0; }
         
-        /* Tabs */
-        .tabs { display: flex; gap: 10px; margin-bottom: 20px; background: #e2e8f0; padding: 5px; border-radius: 8px; }
-        .tab { flex: 1; padding: 10px; cursor: pointer; border-radius: 6px; font-weight: 600; font-size: 14px; color: #64748b; transition: 0.3s; }
-        .tab.active { background: white; color: var(--primary); shadow: 0 2px 5px rgba(0,0,0,0.05); }
+        .input-group { margin-bottom: 15px; }
+        label { display: block; margin-bottom: 5px; font-weight: bold; font-size: 14px; color: #555; }
+        
+        textarea { width: 95%; padding: 10px; border: 1px solid #ccc; border-radius: 8px; height: 80px; resize: none; font-family: inherit; }
+        
+        .upload-box { border: 2px dashed #ccc; padding: 20px; text-align: center; border-radius: 8px; cursor: pointer; background: #fafafa; }
+        .upload-box:hover { border-color: var(--primary); background: #eef6fa; }
 
-        /* Inputs */
-        .input-group { margin-bottom: 15px; display: none; }
-        .input-group.active { display: block; }
+        #preview { max-width: 100%; height: auto; border-radius: 8px; margin-top: 10px; display: none; }
         
-        .upload-box { border: 2px dashed #cbd5e1; padding: 30px; border-radius: 10px; cursor: pointer; color: #64748b; }
-        .upload-box:hover { border-color: var(--primary); background: #f0f9ff; }
-        
-        input[type="text"] { width: 90%; padding: 12px; border: 1px solid #cbd5e1; border-radius: 8px; outline: none; }
-        input[type="text"]:focus { border-color: var(--primary); }
+        .btn { background: var(--primary); color: white; border: none; padding: 12px; width: 100%; border-radius: 8px; font-size: 16px; font-weight: bold; cursor: pointer; margin-top: 10px; display: none;}
+        .btn:disabled { opacity: 0.6; }
 
-        /* Preview & Status */
-        #preview { max-width: 100%; max-height: 250px; border-radius: 8px; margin: 15px auto; display: none; box-shadow: 0 4px 10px rgba(0,0,0,0.1); }
-        .status { font-size: 13px; margin: 10px 0; color: #64748b; font-weight: 500; min-height: 20px;}
-        
-        .btn { background: var(--primary); color: white; border: none; padding: 12px; width: 100%; border-radius: 8px; font-size: 16px; font-weight: bold; cursor: pointer; display: none; }
-        .btn:disabled { opacity: 0.7; }
-
-        /* Result */
-        .result { margin-top: 20px; background: #f1f5f9; padding: 15px; border-radius: 8px; display: none; word-break: break-all; text-align: left; font-size: 13px; color: #334155; border: 1px solid #e2e8f0; }
-        .copy-btn { float: right; background: #334155; color: white; border: none; padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 12px; margin-left: 10px;}
+        .result { margin-top: 15px; padding: 10px; background: #eef; border-radius: 8px; display: none; border: 1px solid #ccd; }
+        .copy-btn { float: right; background: #333; color: white; border: none; padding: 4px 8px; border-radius: 4px; font-size: 12px; cursor: pointer;}
       </style>
     </head>
     <body>
-
       <div class="card">
-        <h2>🍌 Smart Uploader</h2>
+        <h2>✈️ Poster & Telegram</h2>
         
-        <div class="tabs">
-          <div class="tab active" onclick="switchTab('file')">File Upload</div>
-          <div class="tab" onclick="switchTab('url')">Remote URL</div>
+        <div class="input-group">
+            <div class="upload-box" onclick="document.getElementById('fileInput').click()">
+                📷 Tap to select Poster
+            </div>
+            <input type="file" id="fileInput" accept="image/*" style="display:none">
+            <img id="preview">
+            <div id="sizeInfo" style="font-size:12px; color:#888; margin-top:5px; text-align:center;"></div>
         </div>
 
-        <div class="input-group active" id="fileSection">
-          <div class="upload-box" onclick="document.getElementById('fileInput').click()">
-            📂 Tap to select image
-          </div>
-          <input type="file" id="fileInput" accept="image/*" style="display:none">
+        <div class="input-group">
+            <label>Telegram Caption (Optional)</label>
+            <textarea id="caption" placeholder="Enter movie title, quality, etc..."></textarea>
         </div>
 
-        <div class="input-group" id="urlSection">
-          <input type="text" id="urlInput" placeholder="Paste image link here (https://...)" >
-          <button onclick="fetchFromUrl()" style="margin-top:10px; padding:8px; width:100%; background:#e2e8f0; border:none; border-radius:6px; cursor:pointer;">Fetch Image</button>
-        </div>
-
-        <div class="status" id="statusText"></div>
-        <img id="preview">
-        
-        <button class="btn" id="uploadBtn">Upload to Supabase 🚀</button>
+        <button class="btn" id="uploadBtn">Upload & Post</button>
+        <div id="status" style="text-align:center; margin-top:10px; font-size:13px; color:#666;"></div>
 
         <div class="result" id="resultBox">
-          <button class="copy-btn" onclick="copyLink()">Copy</button>
-          <div id="finalLink"></div>
+            <button class="copy-btn" onclick="copyLink()">Copy</button>
+            <strong>Image Link:</strong><br>
+            <span id="finalLink" style="font-size:12px; color:#006699; word-break:break-all;"></span>
+            <div id="tgStatus" style="margin-top:5px; font-size:12px; font-weight:bold;"></div>
         </div>
       </div>
 
       <script>
         let currentFile = null;
+        const fileInput = document.getElementById('fileInput');
         const uploadBtn = document.getElementById('uploadBtn');
-        const statusText = document.getElementById('statusText');
-        const preview = document.getElementById('preview');
-        const resultBox = document.getElementById('resultBox');
+        const status = document.getElementById('status');
 
-        // Tab Switching
-        function switchTab(type) {
-          document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-          document.querySelectorAll('.input-group').forEach(g => g.classList.remove('active'));
-          
-          if(type === 'file') {
-            document.querySelectorAll('.tab')[0].classList.add('active');
-            document.getElementById('fileSection').classList.add('active');
-          } else {
-            document.querySelectorAll('.tab')[1].classList.add('active');
-            document.getElementById('urlSection').classList.add('active');
-          }
-          resetUI();
-        }
+        fileInput.addEventListener('change', async (e) => {
+            const file = e.target.files[0];
+            if(!file) return;
 
-        // 1. Handle File Selection
-        document.getElementById('fileInput').addEventListener('change', (e) => processFile(e.target.files[0]));
+            // Preview
+            const preview = document.getElementById('preview');
+            preview.src = URL.createObjectURL(file);
+            preview.style.display = 'block';
 
-        // 2. Handle URL Fetching
-        async function fetchFromUrl() {
-          const url = document.getElementById('urlInput').value;
-          if(!url) return alert("Please enter a URL");
-          
-          statusText.innerText = "Fetching image from URL...";
-          try {
-            // Use our Deno proxy to avoid CORS
-            const res = await fetch('/proxy?url=' + encodeURIComponent(url));
-            if(!res.ok) throw new Error("Failed to fetch");
-            const blob = await res.blob();
-            const file = new File([blob], "remote_image.jpg", { type: blob.type });
-            processFile(file);
-          } catch (e) {
-            statusText.innerText = "Error: Could not load image.";
-          }
-        }
+            // Resize Logic (70KB Limit)
+            status.innerText = "Checking size...";
+            if (file.size > 71680) {
+                currentFile = await resizeImage(file, 800, 0.7);
+                document.getElementById('sizeInfo').innerText = \`Resized to: \${(currentFile.size/1024).toFixed(1)} KB\`;
+            } else {
+                currentFile = file;
+                document.getElementById('sizeInfo').innerText = \`Original: \${(file.size/1024).toFixed(1)} KB\`;
+            }
+            uploadBtn.style.display = 'block';
+            status.innerText = "";
+        });
 
-        // 3. CORE LOGIC: Process & Check Size
-        async function processFile(file) {
-          if(!file) return;
-          resetUI();
-          
-          // Display Original Info
-          const originalSizeKB = (file.size / 1024).toFixed(2);
-          statusText.innerHTML = \`Original: <b>\${originalSizeKB} KB</b>. Checking size limit...\`;
-          
-          // Show Preview
-          preview.src = URL.createObjectURL(file);
-          preview.style.display = "block";
-
-          // --- 70KB Logic ---
-          if (file.size > 71680) { // 70 * 1024 = 71680 bytes
-             statusText.innerHTML += " <span style='color:orange'>Too big (>70KB). Resizing...</span>";
-             
-             // Resize to 800px width, 70% Quality
-             currentFile = await resizeImage(file, 800, 0.7);
-             
-             const newSizeKB = (currentFile.size / 1024).toFixed(2);
-             statusText.innerHTML = \`Original: \${originalSizeKB} KB -> <b>Resized: \${newSizeKB} KB</b>\`;
-          } else {
-             statusText.innerHTML += " <span style='color:green'>Size OK. Keeping original.</span>";
-             currentFile = file;
-          }
-          
-          uploadBtn.style.display = "block";
-        }
-
-        // 4. Upload Logic
         uploadBtn.addEventListener('click', async () => {
-           if(!currentFile) return;
-           uploadBtn.innerText = "Uploading...";
-           uploadBtn.disabled = true;
+            if(!currentFile) return;
+            
+            uploadBtn.disabled = true;
+            uploadBtn.innerText = "Processing...";
+            status.innerText = "Uploading to Cloud & Telegram...";
 
-           const formData = new FormData();
-           formData.append('file', currentFile);
+            const formData = new FormData();
+            formData.append('file', currentFile);
+            formData.append('caption', document.getElementById('caption').value);
 
-           try {
-             const res = await fetch('/upload', { method: 'POST', body: formData });
-             const data = await res.json();
-             
-             if(data.url) {
-               resultBox.style.display = "block";
-               document.getElementById('finalLink').innerText = data.url;
-               uploadBtn.style.display = "none";
-               statusText.innerHTML = "✅ Upload Successful!";
-             } else {
-               throw new Error(data.error);
-             }
-           } catch(e) {
-             alert("Upload Failed: " + e.message);
-             uploadBtn.innerText = "Try Again";
-             uploadBtn.disabled = false;
-           }
+            try {
+                const res = await fetch('/upload', { method: 'POST', body: formData });
+                const data = await res.json();
+                
+                if(data.url) {
+                    document.getElementById('resultBox').style.display = 'block';
+                    document.getElementById('finalLink').innerText = data.url;
+                    document.getElementById('tgStatus').innerHTML = "Telegram: " + data.telegram;
+                    uploadBtn.style.display = 'none';
+                    status.innerText = "✅ Done!";
+                } else {
+                    alert("Error: " + data.error);
+                }
+            } catch(e) {
+                alert("Failed");
+            } finally {
+                uploadBtn.disabled = false;
+                uploadBtn.innerText = "Upload & Post";
+            }
         });
 
         function resizeImage(file, maxWidth, quality) {
@@ -245,25 +208,14 @@ serve(async (req) => {
               if (w > maxWidth) { h *= maxWidth / w; w = maxWidth; }
               canvas.width = w; canvas.height = h;
               ctx.drawImage(img, 0, 0, w, h);
-              canvas.toBlob(blob => {
-                resolve(new File([blob], file.name, { type: file.type }));
-              }, file.type, quality);
+              canvas.toBlob(blob => resolve(new File([blob], file.name, { type: file.type })), file.type, quality);
             };
           });
         }
-
+        
         function copyLink() {
-          navigator.clipboard.writeText(document.getElementById('finalLink').innerText);
-          alert("Copied!");
-        }
-
-        function resetUI() {
-          preview.style.display = "none";
-          uploadBtn.style.display = "none";
-          resultBox.style.display = "none";
-          statusText.innerText = "";
-          uploadBtn.innerText = "Upload to Supabase 🚀";
-          uploadBtn.disabled = false;
+            navigator.clipboard.writeText(document.getElementById('finalLink').innerText);
+            alert("Copied!");
         }
       </script>
     </body>
