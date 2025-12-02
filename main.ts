@@ -12,7 +12,7 @@ const BUCKET_NAME = "lugyiapp";
 serve(async (req) => {
   const url = new URL(req.url);
 
-  // --- 1. Proxy (URL Upload) ---
+  // --- 1. Proxy (Remote URL Helper) ---
   if (url.pathname === "/proxy") {
     const targetUrl = url.searchParams.get("url");
     if (!targetUrl) return new Response("Missing URL", { status: 400 });
@@ -22,7 +22,7 @@ serve(async (req) => {
     } catch (e) { return new Response("Error", { status: 500 }); }
   }
 
-  // --- 2. Upload API (Auto saves to History) ---
+  // --- 2. Upload API (Saves to History automatically) ---
   if (req.method === "POST" && url.pathname === "/upload") {
     try {
       const formData = await req.formData();
@@ -37,19 +37,20 @@ serve(async (req) => {
 
       const { data: { publicUrl } } = supabase.storage.from(BUCKET_NAME).getPublicUrl(safeName);
 
-      // 🔥 AUTO SAVE TO HISTORY 🔥
+      // Save to History
       await supabase.from('history').insert({ public_url: publicUrl, file_name: safeName });
 
       return new Response(JSON.stringify({ url: publicUrl }), { headers: { "Content-Type": "application/json" } });
     } catch (err) { return new Response(JSON.stringify({ error: err.message }), { status: 500 }); }
   }
 
-  // --- 3. Draft APIs (Queue) ---
+  // --- 3. Draft/Queue APIs ---
   if (req.method === "POST" && url.pathname === "/draft/save") {
     const body = await req.json();
     await supabase.from('drafts').insert({ image_url: body.url, caption: body.caption });
     return new Response(JSON.stringify({ success: true }));
   }
+  // Fixed: Returns 'items' to match frontend expectation
   if (req.method === "GET" && url.pathname === "/draft/list") {
     const { data } = await supabase.from('drafts').select('*').order('created_at', { ascending: true });
     return new Response(JSON.stringify({ items: data || [] }));
@@ -72,13 +73,11 @@ serve(async (req) => {
 
   // --- 4. History APIs ---
   if (req.method === "GET" && url.pathname === "/history/list") {
-    // Get last 50 uploads
     const { data } = await supabase.from('history').select('*').order('created_at', { ascending: false }).limit(50);
     return new Response(JSON.stringify({ items: data || [] }));
   }
   if (req.method === "POST" && url.pathname === "/history/delete") {
     const body = await req.json();
-    // Delete record only (Optionally delete from storage too if needed)
     await supabase.from('history').delete().eq('id', body.id);
     return new Response(JSON.stringify({ success: true }));
   }
@@ -90,38 +89,52 @@ serve(async (req) => {
     <head>
       <meta charset="UTF-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <title>Movie Admin Ultimate</title>
+      <title>Movie Admin X</title>
       <style>
-        :root { --primary: #4f46e5; --bg: #f3f4f6; }
-        body { font-family: sans-serif; background: var(--bg); padding: 10px; max-width: 600px; margin: 0 auto; }
-        .card { background: white; padding: 15px; border-radius: 12px; box-shadow: 0 2px 5px rgba(0,0,0,0.05); margin-bottom: 15px; }
+        :root { --primary: #6366f1; --bg: #f8fafc; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: var(--bg); padding: 15px; max-width: 600px; margin: 0 auto; color: #334155; }
         
-        /* Navigation */
-        .nav { display: flex; gap: 5px; margin-bottom: 15px; background: #e5e7eb; padding: 5px; border-radius: 10px; }
-        .nav-item { flex: 1; padding: 10px; text-align: center; cursor: pointer; border-radius: 8px; font-weight: 600; color: #6b7280; font-size: 14px; }
+        /* Navigation Tabs */
+        .nav { display: flex; background: #e2e8f0; padding: 4px; border-radius: 10px; margin-bottom: 20px; }
+        .nav-item { flex: 1; padding: 10px; text-align: center; cursor: pointer; border-radius: 8px; font-weight: 600; font-size: 14px; color: #64748b; transition: 0.2s; }
         .nav-item.active { background: white; color: var(--primary); box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
-        .view { display: none; }
+        
+        .view { display: none; animation: fadeIn 0.3s; }
         .view.active { display: block; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
 
-        /* Upload Styles */
-        .upload-zone { border: 2px dashed #a5b4fc; padding: 25px; text-align: center; border-radius: 10px; cursor: pointer; background: #eef2ff; color: #4f46e5; }
-        .sub-tabs { display: flex; gap: 10px; margin-bottom: 10px; }
-        .sub-tab { padding: 5px 10px; font-size: 12px; background: #f3f4f6; border-radius: 5px; cursor: pointer; }
-        .sub-tab.active { background: #c7d2fe; color: #312e81; font-weight: bold; }
+        /* Card Style */
+        .card { background: white; padding: 20px; border-radius: 16px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05); margin-bottom: 20px; }
+        
+        /* Upload Section */
+        .sub-tabs { display: flex; gap: 10px; margin-bottom: 15px; border-bottom: 1px solid #f1f5f9; padding-bottom: 10px; }
+        .sub-tab { font-size: 13px; font-weight: 600; cursor: pointer; color: #94a3b8; padding: 5px 0; }
+        .sub-tab.active { color: var(--primary); border-bottom: 2px solid var(--primary); }
+        
         .inp-area { display: none; } .inp-area.active { display: block; }
-        input[type="text"], textarea { width: 100%; padding: 10px; margin: 5px 0; border: 1px solid #d1d5db; border-radius: 6px; box-sizing: border-box; }
         
-        .btn { width: 100%; padding: 12px; background: var(--primary); color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: bold; margin-top: 10px; }
+        .upload-zone { border: 2px dashed #cbd5e1; border-radius: 12px; padding: 30px; text-align: center; cursor: pointer; background: #f8fafc; color: #64748b; margin-top: 10px; }
+        .upload-zone:active { border-color: var(--primary); background: #eef2ff; color: var(--primary); }
+
+        input, textarea { width: 100%; padding: 12px; border: 1px solid #cbd5e1; border-radius: 8px; margin-top: 8px; box-sizing: border-box; font-family: inherit; }
+        input:focus, textarea:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.1); }
+
+        .btn { width: 100%; padding: 12px; background: var(--primary); color: white; border: none; border-radius: 8px; font-weight: bold; cursor: pointer; margin-top: 15px; font-size: 15px; }
+        .btn:disabled { opacity: 0.7; cursor: wait; }
         
-        /* List Items (Queue & History) */
-        .item { display: flex; gap: 10px; padding: 10px; border-bottom: 1px solid #f3f4f6; align-items: center; }
-        .item:last-child { border-bottom: none; }
-        .thumb { width: 60px; height: 60px; object-fit: cover; border-radius: 6px; background: #eee; }
+        /* List Items */
+        .list-container { min-height: 100px; }
+        .item { display: flex; gap: 12px; padding: 12px; border: 1px solid #f1f5f9; border-radius: 10px; margin-bottom: 10px; background: white; align-items: center; }
+        .thumb { width: 60px; height: 60px; object-fit: cover; border-radius: 6px; background: #eee; border: 1px solid #e2e8f0; }
         .info { flex: 1; overflow: hidden; }
-        .info-txt { font-size: 13px; color: #374151; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-        .meta { font-size: 11px; color: #9ca3af; margin-top: 2px; }
-        .actions { display: flex; gap: 5px; }
-        .btn-xs { padding: 5px 10px; border-radius: 4px; border: none; font-size: 11px; cursor: pointer; color: white; }
+        .caption { font-size: 14px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .meta { font-size: 12px; color: #94a3b8; margin-top: 3px; }
+        .actions { display: flex; flex-direction: column; gap: 6px; }
+        .btn-sm { padding: 6px 10px; border: none; border-radius: 6px; font-size: 11px; font-weight: bold; cursor: pointer; color: white; min-width: 50px; }
+        
+        #previewBox { display: none; text-align: center; margin-top: 20px; }
+        #previewImg { max-height: 180px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+        #resultBox { display: none; margin-top: 20px; padding-top: 15px; border-top: 1px solid #e2e8f0; }
       </style>
     </head>
     <body>
@@ -135,32 +148,39 @@ serve(async (req) => {
       <div id="view-upload" class="view active">
         <div class="card">
           <div class="sub-tabs">
-            <div class="sub-tab active" onclick="setInp('file')">File</div>
-            <div class="sub-tab" onclick="setInp('url')">URL</div>
+            <div class="sub-tab active" onclick="setInp('file')">FILE UPLOAD</div>
+            <div class="sub-tab" style="margin-left:15px;" onclick="setInp('url')">REMOTE URL</div>
           </div>
 
           <div id="inp-file" class="inp-area active">
-            <div class="upload-zone" onclick="document.getElementById('fileInput').click()">📸 Select Image</div>
+            <div class="upload-zone" onclick="document.getElementById('fileInput').click()">
+              📸 Tap to Select Image
+            </div>
             <input type="file" id="fileInput" accept="image/*" style="display:none">
           </div>
+
           <div id="inp-url" class="inp-area">
-             <input type="text" id="urlInput" placeholder="Paste URL here...">
-             <button class="btn" style="background:#6b7280; margin-top:0;" onclick="fetchUrl()">Fetch</button>
+             <input type="text" id="urlInput" placeholder="Paste image URL here...">
+             <button class="btn" style="background:#475569; margin-top:10px;" onclick="fetchUrl()">Fetch Image</button>
           </div>
 
-          <div id="previewBox" style="display:none; margin-top:15px; text-align:center;">
-             <div id="sizeMsg" style="font-size:12px; margin-bottom:5px; color:#6b7280;"></div>
-             <img id="previewImg" style="max-height:150px; border-radius:8px;">
-             <button class="btn" id="uploadBtn">Upload</button>
+          <div id="previewBox">
+             <div id="sizeMsg" style="font-size:12px; color:#64748b; margin-bottom:8px;"></div>
+             <img id="previewImg">
+             <button class="btn" id="uploadBtn">Upload to Supabase 🚀</button>
           </div>
 
-          <div id="resultBox" style="display:none; margin-top:15px; padding-top:10px; border-top:1px solid #eee;">
-             <input type="text" id="directLink" readonly onclick="this.select()">
-             <button class="btn" style="background:#059669; padding:8px;" onclick="copyLink()">Copy Link</button>
+          <div id="resultBox">
+             <label style="font-size:12px; font-weight:bold; color:#059669;">DIRECT LINK:</label>
+             <div style="display:flex; gap:5px;">
+               <input type="text" id="directLink" readonly onclick="this.select()" style="margin-top:0;">
+               <button onclick="copyLink()" style="background:#059669; color:white; border:none; border-radius:8px; padding:0 12px; cursor:pointer;">Copy</button>
+             </div>
              
-             <div style="margin-top:15px;">
-               <textarea id="caption" rows="2" placeholder="Caption for Queue..."></textarea>
-               <button class="btn" style="background:#374151;" onclick="saveDraft()">Add to Queue 📥</button>
+             <div style="margin-top:20px; background:#f0fdf4; padding:15px; border-radius:10px; border:1px solid #bbf7d0;">
+               <label style="font-size:12px; font-weight:bold; color:#15803d;">ADD TO QUEUE:</label>
+               <textarea id="caption" rows="2" placeholder="Movie Title / Caption..."></textarea>
+               <button class="btn" style="background:#15803d; margin-top:8px;" onclick="saveDraft()">Save Draft 📥</button>
              </div>
           </div>
         </div>
@@ -168,35 +188,42 @@ serve(async (req) => {
 
       <div id="view-queue" class="view">
         <div class="card">
-           <div style="display:flex; justify-content:space-between; margin-bottom:10px;">
-             <b style="color:#374151">Pending Posts</b>
-             <button onclick="sendAll()" style="background:#111827; color:white; border:none; padding:5px 10px; border-radius:4px; font-size:12px;">Send ALL 🚀</button>
+           <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px;">
+             <b style="color:#0f172a;">Pending Posts</b>
+             <button onclick="sendAll()" style="background:#0f172a; color:white; border:none; padding:8px 12px; border-radius:6px; font-size:12px; font-weight:bold; cursor:pointer;">Send ALL 🚀</button>
            </div>
-           <div id="queueList">Loading...</div>
+           <div id="queueList" class="list-container">Loading...</div>
         </div>
       </div>
 
       <div id="view-history" class="view">
         <div class="card">
-           <b style="color:#374151; display:block; margin-bottom:10px;">Upload History (Last 50)</b>
-           <div id="historyList">Loading...</div>
+           <b style="color:#0f172a; display:block; margin-bottom:15px;">Upload History</b>
+           <div id="historyList" class="list-container">Loading...</div>
         </div>
       </div>
 
       <script>
-        // --- Navigation ---
+        // --- Navigation Logic ---
         function setView(v) {
-          document.querySelectorAll('.view').forEach(e => e.classList.remove('active'));
+          // Update Tabs
           document.querySelectorAll('.nav-item').forEach(e => e.classList.remove('active'));
-          document.getElementById('view-'+v).classList.add('active');
           const idx = ['upload','queue','history'].indexOf(v);
           document.querySelectorAll('.nav-item')[idx].classList.add('active');
-          if(v==='queue') loadList('draft');
-          if(v==='history') loadList('history');
+          
+          // Update View
+          document.querySelectorAll('.view').forEach(e => e.classList.remove('active'));
+          document.getElementById('view-'+v).classList.add('active');
+
+          // Load Data if needed
+          if(v === 'queue') loadList('draft'); // FIXED NAME MAPPING HERE
+          if(v === 'history') loadList('history');
         }
+
         function setInp(t) {
-          document.querySelectorAll('.inp-area').forEach(e => e.classList.remove('active'));
           document.querySelectorAll('.sub-tab').forEach(e => e.classList.remove('active'));
+          document.querySelectorAll('.inp-area').forEach(e => e.classList.remove('active'));
+          
           document.getElementById('inp-'+t).classList.add('active');
           const idx = ['file','url'].indexOf(t);
           document.querySelectorAll('.sub-tab')[idx].classList.add('active');
@@ -212,21 +239,24 @@ serve(async (req) => {
            try {
              const res = await fetch('/proxy?url='+encodeURIComponent(u));
              const blob = await res.blob();
-             processFile(new File([blob], "rem.jpg", { type: blob.type }));
-           } catch(e) { alert("Error fetching"); }
+             processFile(new File([blob], "remote.jpg", { type: blob.type }));
+           } catch(e) { alert("Failed to fetch image"); }
         }
 
         async function processFile(f) {
            if(!f) return;
-           let msg = \`Orig: \${(f.size/1024).toFixed(1)} KB\`;
-           if(f.size > 71680) {
-             msg += " -> Compressing...";
-             document.getElementById('sizeMsg').innerText = msg;
-             currFile = await compress(f, 0.6); // Keep resolution
-             msg += \` \${(currFile.size/1024).toFixed(1)} KB\`;
-           } else { currFile = f; }
+           let msg = \`Original: \${(f.size/1024).toFixed(1)} KB\`;
            
-           document.getElementById('sizeMsg').innerText = msg;
+           if(f.size > 71680) { // 70KB
+             msg += " <span style='color:#eab308'>(Compressing...)</span>";
+             document.getElementById('sizeMsg').innerHTML = msg;
+             currFile = await compress(f, 0.6);
+             msg += \` ➝ \${(currFile.size/1024).toFixed(1)} KB\`;
+           } else {
+             currFile = f;
+           }
+           
+           document.getElementById('sizeMsg').innerHTML = msg;
            document.getElementById('previewImg').src = URL.createObjectURL(currFile);
            document.getElementById('previewBox').style.display = 'block';
            document.getElementById('resultBox').style.display = 'none';
@@ -235,74 +265,92 @@ serve(async (req) => {
         document.getElementById('uploadBtn').addEventListener('click', async () => {
            const btn = document.getElementById('uploadBtn');
            btn.innerText = "Uploading..."; btn.disabled = true;
+           
            const fd = new FormData(); fd.append('file', currFile);
-           
-           const res = await fetch('/upload', { method:'POST', body:fd });
-           const data = await res.json();
-           
-           if(data.url) {
-             document.getElementById('directLink').value = data.url;
-             document.getElementById('resultBox').style.display = 'block';
-             btn.style.display = 'none';
-           }
-           btn.innerText = "Upload"; btn.disabled = false;
+           try {
+             const res = await fetch('/upload', { method:'POST', body:fd });
+             const data = await res.json();
+             if(data.url) {
+               document.getElementById('directLink').value = data.url;
+               document.getElementById('resultBox').style.display = 'block';
+               btn.style.display = 'none';
+             }
+           } catch(e) { alert("Error uploading"); }
+           btn.innerText = "Upload to Supabase 🚀"; btn.disabled = false;
         });
 
-        // --- Queue & History Logic ---
+        // --- Draft & Queue Logic ---
         async function saveDraft() {
            const url = document.getElementById('directLink').value;
            const cap = document.getElementById('caption').value;
            await fetch('/draft/save', { method:'POST', body:JSON.stringify({url, caption:cap}) });
-           alert("Added to Queue");
+           alert("Added to Queue ✅");
            document.getElementById('caption').value = "";
-           setView('queue');
+           setView('queue'); // Auto go to queue
         }
 
         async function loadList(type) {
-           const div = document.getElementById(type+'List');
-           div.innerHTML = "Loading...";
-           const res = await fetch('/'+type+'/list');
-           const data = await res.json();
-           const items = data.items || [];
+           // FIXED: Map 'draft' type to 'queueList' ID
+           const targetId = type === 'draft' ? 'queueList' : 'historyList';
+           const div = document.getElementById(targetId);
            
-           if(items.length === 0) { div.innerHTML = "<p align='center' style='color:#ccc'>Empty</p>"; return; }
+           div.innerHTML = "<div style='text-align:center; color:#94a3b8; padding:20px;'>Loading...</div>";
+           
+           try {
+             const res = await fetch(type === 'draft' ? '/draft/list' : '/history/list');
+             const data = await res.json();
+             const items = data.items || []; // Backend returns { items: [...] }
 
-           div.innerHTML = items.map(i => {
-             const date = new Date(i.created_at).toLocaleTimeString();
-             // Difference between Draft and History items
-             if(type === 'draft') {
-               return \`<div class="item">
-                 <img src="\${i.image_url}" class="thumb" onclick="window.open(this.src)">
-                 <div class="info">
-                   <div class="info-txt">\${i.caption || 'No Caption'}</div>
-                   <div class="meta">\${date}</div>
-                 </div>
-                 <div class="actions">
-                   <button class="btn-xs" style="background:#10b981" onclick="sendDraft(\${i.id})">Send</button>
-                   <button class="btn-xs" style="background:#ef4444" onclick="delDraft(\${i.id})">Del</button>
-                 </div>
-               </div>\`;
-             } else {
-               // History Item
-               return \`<div class="item">
-                 <img src="\${i.public_url}" class="thumb" onclick="window.open(this.src)">
-                 <div class="info">
-                   <div class="info-txt"><a href="\${i.public_url}" target="_blank" style="text-decoration:none; color:#2563eb;">Link</a></div>
-                   <div class="meta">\${date}</div>
-                 </div>
-                 <div class="actions">
-                   <button class="btn-xs" style="background:#6366f1" onclick="copyHist('\${i.public_url}')">Copy</button>
-                   <button class="btn-xs" style="background:#ef4444" onclick="delHist(\${i.id})">Del</button>
-                 </div>
-               </div>\`;
+             if(items.length === 0) {
+               div.innerHTML = "<div style='text-align:center; color:#94a3b8; padding:20px;'>Empty</div>";
+               return;
              }
-           }).join('');
+
+             div.innerHTML = items.map(i => {
+               const date = new Date(i.created_at).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+               
+               if(type === 'draft') {
+                 // Draft Item
+                 return \`
+                   <div class="item">
+                     <img src="\${i.image_url}" class="thumb" onclick="window.open(this.src)">
+                     <div class="info">
+                       <div class="caption">\${i.caption || '<i style="color:#ccc">No Caption</i>'}</div>
+                       <div class="meta">\${date}</div>
+                     </div>
+                     <div class="actions">
+                       <button class="btn-sm" style="background:#10b981" onclick="sendDraft(\${i.id})">Send</button>
+                       <button class="btn-sm" style="background:#ef4444" onclick="delDraft(\${i.id})">Del</button>
+                     </div>
+                   </div>\`;
+               } else {
+                 // History Item
+                 return \`
+                   <div class="item">
+                     <img src="\${i.public_url}" class="thumb" onclick="window.open(this.src)">
+                     <div class="info">
+                       <div class="caption" style="font-size:12px; color:#2563eb;">\${i.file_name}</div>
+                       <div class="meta">\${date}</div>
+                     </div>
+                     <div class="actions">
+                       <button class="btn-sm" style="background:#3b82f6" onclick="copyUrl('\${i.public_url}')">Copy</button>
+                       <button class="btn-sm" style="background:#ef4444" onclick="delHist(\${i.id})">Del</button>
+                     </div>
+                   </div>\`;
+               }
+             }).join('');
+           } catch(e) {
+             div.innerHTML = "<div style='color:red; text-align:center'>Error loading list</div>";
+           }
         }
 
-        // Actions
+        // --- Actions ---
         async function sendDraft(id) {
+           // Reload to get full item data (safest way)
            const res = await fetch('/draft/list'); const d = await res.json();
            const item = d.items.find(x => x.id === id);
+           if(!item) return;
+           
            await fetch('/draft/send', { method:'POST', body:JSON.stringify(item) });
            loadList('draft');
         }
@@ -313,27 +361,27 @@ serve(async (req) => {
         }
         async function sendAll() {
            const res = await fetch('/draft/list'); const d = await res.json();
-           if(d.items.length === 0) return alert("Empty");
-           if(!confirm("Send all?")) return;
-           for(const i of d.items) {
-              await fetch('/draft/send', { method:'POST', body:JSON.stringify(i) });
-              await new Promise(r => setTimeout(r, 1000));
+           if(d.items.length === 0) return alert("Queue is empty");
+           if(!confirm(\`Send all \${d.items.length} posts?\`)) return;
+           
+           for(const item of d.items) {
+             await fetch('/draft/send', { method:'POST', body:JSON.stringify(item) });
+             await new Promise(r => setTimeout(r, 1000)); // 1 sec delay
            }
-           alert("Done"); loadList('draft');
+           alert("All Sent! 🎉");
+           loadList('draft');
         }
-
+        
         // History Actions
         async function delHist(id) {
-           if(!confirm("Remove from history?")) return;
+           if(!confirm("Delete from history?")) return;
            await fetch('/history/delete', { method:'POST', body:JSON.stringify({id}) });
            loadList('history');
         }
-        function copyHist(url) {
-           navigator.clipboard.writeText(url); alert("Copied!");
-        }
-        function copyLink() { copyHist(document.getElementById('directLink').value); }
+        function copyUrl(u) { navigator.clipboard.writeText(u); alert("Copied!"); }
+        function copyLink() { copyUrl(document.getElementById('directLink').value); }
 
-        // Utils
+        // Compressor
         function compress(file, quality) {
           return new Promise((resolve) => {
             const img = document.createElement('img');
