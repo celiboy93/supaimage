@@ -5,39 +5,38 @@ const supabaseUrl = Deno.env.get("SUPABASE_URL") || "";
 const supabaseKey = Deno.env.get("SUPABASE_KEY") || "";
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-// Bucket နာမည် (မိတ်ဆွေ Link မှာပါတဲ့အတိုင်း "lugyiapp" လို့ ထားလိုက်ပါတယ်)
 const BUCKET_NAME = "lugyiapp"; 
 
 serve(async (req) => {
   const url = new URL(req.url);
 
-  // ၁။ ပုံ Upload တင်တဲ့ အပိုင်း (API)
+  // --- API: Upload Section ---
   if (req.method === "POST" && url.pathname === "/upload") {
     try {
       const formData = await req.formData();
       const file = formData.get("file") as File;
       
-      if (!file) {
-        return new Response("No file uploaded", { status: 400 });
-      }
+      if (!file) return new Response("No file uploaded", { status: 400 });
 
-      // နာမည်မထပ်အောင် Timestamp ထည့်ပေးမယ်
-      const fileName = `${Date.now()}_${file.name}`;
+      // 🔥 မြန်မာစာ ပြဿနာဖြေရှင်းခြင်း 🔥
+      // မူရင်းနာမည်ကို မယူတော့ဘဲ၊ အချိန်နဲ့ Random နံပါတ်ကို ပေါင်းပြီး English နာမည်အသစ် ပေးလိုက်မယ်
+      const fileExt = file.name.split('.').pop() || 'jpg';
+      const safeName = `img_${Date.now()}_${Math.random().toString(36).substring(2, 9)}.${fileExt}`;
       
-      // Supabase ကို လှမ်းသိမ်းမယ်
+      // Supabase သို့ Upload တင်ခြင်း
       const { data, error } = await supabase.storage
         .from(BUCKET_NAME)
-        .upload(fileName, file, {
+        .upload(safeName, file, {
           contentType: file.type,
           upsert: false
         });
 
       if (error) throw error;
 
-      // Public URL ပြန်ထုတ်ပေးမယ်
+      // Public URL ထုတ်ယူခြင်း
       const { data: { publicUrl } } = supabase.storage
         .from(BUCKET_NAME)
-        .getPublicUrl(fileName);
+        .getPublicUrl(safeName);
 
       return new Response(JSON.stringify({ url: publicUrl }), {
         headers: { "Content-Type": "application/json" },
@@ -48,134 +47,241 @@ serve(async (req) => {
     }
   }
 
-  // ၂။ Frontend အပိုင်း (UI Page)
+  // --- UI: Frontend Design Section ---
   return new Response(`
     <!DOCTYPE html>
-    <html>
-      <head>
-        <title>Movie Poster Uploader</title>
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <style>
-          body { font-family: sans-serif; padding: 20px; text-align: center; }
-          .container { max-width: 500px; margin: 0 auto; }
-          #preview { max-width: 100%; margin-top: 10px; border-radius: 8px; display: none; }
-          button { padding: 10px 20px; background: #3ecf8e; border: none; color: white; border-radius: 5px; cursor: pointer; font-size: 16px; margin-top: 10px;}
-          input { margin-bottom: 20px; }
-          .result-box { margin-top: 20px; padding: 10px; background: #f0f0f0; word-break: break-all; display: none; border: 1px solid #ccc; border-radius: 5px;}
-          .loading { color: blue; display: none; }
-        </style>
-      </head>
-      <body>
-        <div class="container">
-          <h2>🍌 Poster Uploader</h2>
-          <p>ပုံရွေးလိုက်တာနဲ့ Auto ချုံ့ပီးမှ တင်ပေးပါမယ်</p>
-          
-          <input type="file" id="fileInput" accept="image/*">
-          <br>
+    <html lang="en">
+    <head>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>Poster Uploader Pro</title>
+      <style>
+        :root {
+          --primary: #6366f1;
+          --primary-dark: #4f46e5;
+          --bg-gradient: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+        body {
+          margin: 0;
+          padding: 20px;
+          min-height: 100vh;
+          font-family: 'Segoe UI', sans-serif;
+          background: var(--bg-gradient);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          color: #333;
+        }
+        .card {
+          background: rgba(255, 255, 255, 0.95);
+          backdrop-filter: blur(10px);
+          width: 100%;
+          max-width: 400px;
+          padding: 30px;
+          border-radius: 20px;
+          box-shadow: 0 10px 25px rgba(0,0,0,0.2);
+          text-align: center;
+        }
+        h2 { margin-top: 0; color: #444; font-weight: 700; }
+        
+        /* Upload Area Design */
+        .upload-area {
+          border: 2px dashed #cbd5e1;
+          border-radius: 12px;
+          padding: 20px;
+          margin: 20px 0;
+          cursor: pointer;
+          transition: all 0.3s ease;
+          position: relative;
+        }
+        .upload-area:hover { border-color: var(--primary); background: #f8fafc; }
+        .upload-icon { font-size: 40px; color: #94a3b8; display: block; margin-bottom: 10px; }
+        
+        /* Preview Image */
+        #preview {
+          max-width: 100%;
+          max-height: 250px;
+          border-radius: 10px;
+          display: none;
+          box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+          margin: 0 auto;
+        }
+
+        /* Buttons */
+        .btn {
+          background: var(--primary);
+          color: white;
+          border: none;
+          padding: 12px 24px;
+          border-radius: 8px;
+          font-size: 16px;
+          font-weight: 600;
+          cursor: pointer;
+          width: 100%;
+          transition: transform 0.1s;
+          display: none; /* Hidden initially */
+        }
+        .btn:active { transform: scale(0.98); }
+        .btn:disabled { opacity: 0.7; cursor: not-allowed; }
+
+        /* Link Result Box */
+        .result-box {
+          margin-top: 20px;
+          background: #f1f5f9;
+          padding: 15px;
+          border-radius: 10px;
+          display: none;
+          text-align: left;
+        }
+        .link-text {
+          font-size: 13px;
+          color: #64748b;
+          word-break: break-all;
+          margin-bottom: 8px;
+          font-family: monospace;
+        }
+        .copy-btn {
+          background: #334155;
+          color: white;
+          border: none;
+          padding: 8px 16px;
+          border-radius: 6px;
+          font-size: 14px;
+          cursor: pointer;
+          width: auto;
+          display: inline-block;
+        }
+
+        /* Input file hidden */
+        input[type="file"] { display: none; }
+        
+        .loading-text { color: var(--primary); font-weight: 600; margin-top: 10px; display: none; }
+      </style>
+    </head>
+    <body>
+
+      <div class="card">
+        <h2>🍌 Poster Upload</h2>
+        <p style="color:#666; font-size:14px;">Upload your movie poster here</p>
+        
+        <div class="upload-area" id="dropArea" onclick="document.getElementById('fileInput').click()">
+          <span class="upload-icon">📷</span>
+          <span id="uploadText">Tap to choose image</span>
           <img id="preview" />
-          <br>
-          <button id="uploadBtn" style="display:none;">Upload to Supabase</button>
-          
-          <p class="loading" id="loading">ပုံတင်နေပါပြီ...</p>
-          
-          <div class="result-box" id="resultBox">
-            <p><strong>Copy Link:</strong></p>
-            <a id="linkResult" href="#" target="_blank"></a>
-          </div>
         </div>
+        
+        <input type="file" id="fileInput" accept="image/*">
 
-        <script>
-          const fileInput = document.getElementById('fileInput');
-          const uploadBtn = document.getElementById('uploadBtn');
-          const preview = document.getElementById('preview');
-          const loading = document.getElementById('loading');
-          const resultBox = document.getElementById('resultBox');
-          const linkResult = document.getElementById('linkResult');
+        <p class="loading-text" id="loadingText">Processing...</p>
+        
+        <button class="btn" id="uploadBtn">Upload to Cloud 🚀</button>
 
-          let resizedFile = null;
+        <div class="result-box" id="resultBox">
+          <div class="link-text" id="linkResult">https://...</div>
+          <button class="copy-btn" onclick="copyLink()">📋 Copy Link</button>
+        </div>
+      </div>
 
-          fileInput.addEventListener('change', async (e) => {
-            const file = e.target.files[0];
-            if (!file) return;
+      <script>
+        const fileInput = document.getElementById('fileInput');
+        const preview = document.getElementById('preview');
+        const uploadBtn = document.getElementById('uploadBtn');
+        const uploadText = document.getElementById('uploadText');
+        const loadingText = document.getElementById('loadingText');
+        const resultBox = document.getElementById('resultBox');
+        const linkResult = document.getElementById('linkResult');
+        const uploadIcon = document.querySelector('.upload-icon');
+        
+        let resizedFile = null;
 
-            // Preview ပြမယ်
-            preview.src = URL.createObjectURL(file);
-            preview.style.display = 'block';
-            uploadBtn.style.display = 'inline-block';
-            
-            // --- Auto Resize Logic (Data Size ချုံ့ခြင်း) ---
-            loading.innerText = "ပုံကို ချုံ့နေပါသည်...";
-            loading.style.display = "block";
-            
-            resizedFile = await resizeImage(file, 1000, 0.7); // Max Width 1000px, Quality 70%
-            
-            loading.style.display = "none";
-            console.log("Original size:", file.size / 1024, "KB");
-            console.log("Resized size:", resizedFile.size / 1024, "KB");
-          });
+        // 1. Image Select Logic
+        fileInput.addEventListener('change', async (e) => {
+          const file = e.target.files[0];
+          if (!file) return;
 
-          uploadBtn.addEventListener('click', async () => {
-            if (!resizedFile) return;
+          // Show loading for resize
+          loadingText.innerText = "Resizing image...";
+          loadingText.style.display = "block";
+          uploadText.style.display = "none";
+          uploadIcon.style.display = "none";
+          resultBox.style.display = "none";
 
-            loading.innerText = "Supabase သို့ ပို့နေပါသည်...";
-            loading.style.display = "block";
-            resultBox.style.display = "none";
-            uploadBtn.disabled = true;
+          // Resize Logic (Client Side)
+          resizedFile = await resizeImage(file, 1000, 0.7);
+          
+          // Show Preview
+          preview.src = URL.createObjectURL(resizedFile);
+          preview.style.display = "block";
+          loadingText.style.display = "none";
+          
+          // Show Upload Button
+          uploadBtn.style.display = "block";
+        });
 
-            const formData = new FormData();
-            formData.append('file', resizedFile);
+        // 2. Upload Logic
+        uploadBtn.addEventListener('click', async () => {
+          if (!resizedFile) return;
 
-            try {
-              const res = await fetch('/upload', { method: 'POST', body: formData });
-              const data = await res.json();
+          loadingText.innerText = "Uploading to Supabase...";
+          loadingText.style.display = "block";
+          uploadBtn.disabled = true;
+          uploadBtn.innerText = "Uploading...";
 
-              if (data.url) {
-                linkResult.href = data.url;
-                linkResult.textContent = data.url;
-                resultBox.style.display = 'block';
-              } else {
-                alert('Error: ' + data.error);
-              }
-            } catch (err) {
-              alert('Upload failed');
-            } finally {
-              loading.style.display = "none";
+          const formData = new FormData();
+          formData.append('file', resizedFile); // Send the resized file
+
+          try {
+            const res = await fetch('/upload', { method: 'POST', body: formData });
+            const data = await res.json();
+
+            if (data.url) {
+              loadingText.style.display = "none";
+              uploadBtn.style.display = "none"; // Hide button after success
+              
+              // Show Result
+              resultBox.style.display = "block";
+              linkResult.innerText = data.url;
+            } else {
+              alert("Error: " + (data.error || "Unknown error"));
               uploadBtn.disabled = false;
+              uploadBtn.innerText = "Upload to Cloud 🚀";
             }
-          });
-
-          // ပုံချုံ့ပေးတဲ့ Function (ဖုန်းထဲမှာတင် အလုပ်လုပ်သည်)
-          function resizeImage(file, maxWidth, quality) {
-            return new Promise((resolve) => {
-              const img = document.createElement('img');
-              img.src = URL.createObjectURL(file);
-              img.onload = () => {
-                const canvas = document.createElement('canvas');
-                const ctx = canvas.getContext('2d');
-                
-                // အချိုးအစား တွက်ချက်ခြင်း
-                let width = img.width;
-                let height = img.height;
-                if (width > maxWidth) {
-                  height *= maxWidth / width;
-                  width = maxWidth;
-                }
-
-                canvas.width = width;
-                canvas.height = height;
-                ctx.drawImage(img, 0, 0, width, height);
-
-                // Blob (File) အဖြစ် ပြန်ထုတ်ခြင်း
-                canvas.toBlob((blob) => {
-                  // နဂိုနာမည်နဲ့ File Object ပြန်ဆောက်မယ်
-                  const newFile = new File([blob], file.name, { type: 'image/jpeg' });
-                  resolve(newFile);
-                }, 'image/jpeg', quality); 
-              };
-            });
+          } catch (err) {
+            alert("Upload Failed!");
+            uploadBtn.disabled = false;
           }
-        </script>
-      </body>
+        });
+
+        // 3. Copy Function
+        function copyLink() {
+          const text = linkResult.innerText;
+          navigator.clipboard.writeText(text).then(() => {
+            const btn = document.querySelector('.copy-btn');
+            btn.innerText = "✅ Copied!";
+            setTimeout(() => btn.innerText = "📋 Copy Link", 2000);
+          });
+        }
+
+        // 4. Resize Function (Standard)
+        function resizeImage(file, maxWidth, quality) {
+          return new Promise((resolve) => {
+            const img = document.createElement('img');
+            img.src = URL.createObjectURL(file);
+            img.onload = () => {
+              const canvas = document.createElement('canvas');
+              const ctx = canvas.getContext('2d');
+              let w = img.width, h = img.height;
+              if (w > maxWidth) { h *= maxWidth / w; w = maxWidth; }
+              canvas.width = w; canvas.height = h;
+              ctx.drawImage(img, 0, 0, w, h);
+              canvas.toBlob(blob => {
+                resolve(new File([blob], "image.jpg", { type: "image/jpeg" }));
+              }, 'image/jpeg', quality);
+            };
+          });
+        }
+      </script>
+    </body>
     </html>
   `, { headers: { "content-type": "text/html; charset=utf-8" } });
 });
